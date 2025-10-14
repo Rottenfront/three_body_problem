@@ -1,0 +1,10 @@
+[package]
+name = "three_body_problem"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# kiss3d = { version = "0.36", features = ["conrod"] }
+
+macroquad = "0.4"
+egui-macroquad = "0.17"
