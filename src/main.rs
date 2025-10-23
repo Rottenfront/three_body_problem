@@ -5,8 +5,9 @@ use macroquad::prelude::*;
 
 // use glam::vec3;
 
-const MOVE_SPEED: f32 = 0.1;
+const MOVE_SPEED: f32 = 0.01;
 const LOOK_SPEED: f32 = 0.1;
+const POSITION_SCALE: f32 = 0.001;
 
 fn conf() -> Conf {
     Conf {
@@ -38,12 +39,27 @@ impl Body {
         }
     }
 
-    fn translate(&mut self, x: f32, y: f32, z: f32) {
-        self.position = vec3(x, y, z);
-    }
-
     fn accelerate(&mut self, a: Vec3, dt: f32) {
         self.velocity += a * dt;
+    }
+
+    fn find_acceleration(&self, other: &Self) -> Vec3 {
+        const G: f32 = 6.67430e-8;
+        const EPS: f32 = 1e-9;
+        let vector = other.position - self.position;
+        let r = vector.length();
+
+        let normalized = vector.normalize();
+        let acceleration = if r < EPS {
+            0.0
+        } else {
+            G * other.mass / (r * r)
+        };
+        normalized * acceleration
+    }
+
+    fn accelerate_by_body(&mut self, other: &Self, dt: f32) {
+        self.accelerate(self.find_acceleration(other), dt);
     }
 
     fn move_sphere(&mut self, dt: f32) {
@@ -55,31 +71,13 @@ struct System {
     bodies: Vec<Body>,
 }
 
-fn accelerate(body1: &mut Body, body2: &Body, dt: f32) {
-    fn find_acceleration(body1: &Body, body2: &Body) -> Vec3 {
-        const G: f32 = 6.67430e-8;
-        const EPS: f32 = 1e-9;
-        let vector = body2.position - body1.position;
-        let r = vector.length();
-
-        let normalized = vector.normalize();
-        let acceleration = if r < EPS {
-            0.0
-        } else {
-            G * body2.mass / (r * r)
-        };
-        normalized * acceleration
-    }
-    body1.accelerate(find_acceleration(body1, body2), dt);
-}
-
 impl System {
     fn accelerate(&mut self, dt: f32) {
         for i in 0..self.bodies.len() {
             let mut current = self.bodies[i].clone();
             for j in 0..self.bodies.len() {
                 if i != j {
-                    accelerate(&mut current, &self.bodies[j], dt);
+                    current.accelerate_by_body(&self.bodies[j], dt);
                 }
             }
             self.bodies[i] = current;
@@ -91,33 +89,211 @@ impl System {
             body.move_sphere(dt);
         }
     }
+
+    fn mass_center(&self) -> Vec3 {
+        if self.bodies.is_empty() {
+            vec3(0.0, 0.0, 0.0)
+        } else {
+            self.bodies
+                .iter()
+                .fold(Vec3::ZERO, |acc, body| acc + body.position * body.mass)
+                / self.bodies.iter().fold(0.0, |acc, body| acc + body.mass)
+                * POSITION_SCALE
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusPoint {
+    None,
+    MassCenter,
+    Body(usize),
+}
+
+struct Camera {
+    x: f32,
+    switch: bool,
+    bounds: f32,
+    world_up: Vec3,
+    yaw: f32,
+    pitch: f32,
+    radius: f32,
+    front: Vec3,
+    right: Vec3,
+    up: Vec3,
+
+    position: Vec3,
+    last_mouse_position: Vec2,
+
+    grabbed: bool,
+}
+
+impl Camera {
+    fn new() -> Self {
+        let x = 0.0;
+        let switch = false;
+        let bounds = 8.0;
+        let world_up = vec3(0.0, 1.0, 0.0);
+        let yaw: f32 = 1.18;
+        let pitch: f32 = 0.0;
+        let radius = 5.0;
+
+        let front = vec3(
+            yaw.cos() * pitch.cos(),
+            pitch.sin(),
+            yaw.sin() * pitch.cos(),
+        )
+        .normalize();
+        let right = front.cross(world_up).normalize();
+        let up = right.cross(front).normalize();
+
+        let position = vec3(0.0, 0.0, 0.0);
+        let last_mouse_position: Vec2 = mouse_position().into();
+
+        let grabbed = true;
+        set_cursor_grab(grabbed);
+        show_mouse(false);
+        Self {
+            yaw,
+            pitch,
+            radius,
+            front,
+            right,
+            up,
+            position,
+            last_mouse_position,
+            grabbed,
+            x,
+            switch,
+            bounds,
+            world_up,
+        }
+    }
+
+    fn update_free(&mut self) {
+        if is_key_down(KeyCode::W) {
+            self.position += self.front * MOVE_SPEED;
+        }
+        if is_key_down(KeyCode::S) {
+            self.position -= self.front * MOVE_SPEED;
+        }
+        if is_key_down(KeyCode::A) {
+            self.position -= self.right * MOVE_SPEED;
+        }
+        if is_key_down(KeyCode::D) {
+            self.position += self.right * MOVE_SPEED;
+        }
+
+        if is_key_down(KeyCode::Q) {
+            self.position += self.up * MOVE_SPEED;
+        }
+        if is_key_down(KeyCode::E) {
+            self.position -= self.up * MOVE_SPEED;
+        }
+
+        let mouse_position: Vec2 = mouse_position().into();
+        let mouse_delta = mouse_position - self.last_mouse_position;
+
+        self.last_mouse_position = mouse_position;
+
+        if self.grabbed {
+            let delta = get_frame_time();
+            self.yaw += mouse_delta.x * delta * LOOK_SPEED;
+            self.pitch += mouse_delta.y * delta * -LOOK_SPEED;
+
+            self.pitch = self.pitch.clamp(-1.5, 1.5);
+
+            self.front = vec3(
+                self.yaw.cos() * self.pitch.cos(),
+                self.pitch.sin(),
+                self.yaw.sin() * self.pitch.cos(),
+            )
+            .normalize();
+
+            self.right = self.front.cross(self.world_up).normalize();
+            self.up = self.right.cross(self.front).normalize();
+
+            self.x += if self.switch { 0.04 } else { -0.04 };
+            if self.x >= self.bounds || self.x <= -self.bounds {
+                self.switch = !self.switch;
+            }
+        }
+    }
+
+    fn update_with_point(&mut self, focus_point: Vec3) {
+        let delta = get_frame_time();
+        if is_key_down(KeyCode::A) {
+            self.yaw -= LOOK_SPEED * delta;
+        }
+        if is_key_down(KeyCode::D) {
+            self.yaw += LOOK_SPEED * delta;
+        }
+        if is_key_down(KeyCode::Q) {
+            self.pitch += LOOK_SPEED * delta;
+        }
+        if is_key_down(KeyCode::E) {
+            self.pitch -= LOOK_SPEED * delta;
+        }
+
+        // zoom in/out
+        if is_key_down(KeyCode::W) {
+            self.radius -= MOVE_SPEED * 2.0;
+        }
+        if is_key_down(KeyCode::S) {
+            self.radius += MOVE_SPEED * 2.0;
+        }
+        self.position = focus_point
+            + vec3(
+                self.yaw.cos() * self.pitch.cos(),
+                self.pitch.sin(),
+                self.yaw.sin() * self.pitch.cos(),
+            ) * self.radius;
+        self.front = (focus_point - self.position).normalize();
+        self.right = self.front.cross(self.world_up).normalize();
+        self.up = self.right.cross(self.front).normalize();
+    }
+
+    fn apply_self(&self) {
+        set_camera(&Camera3D {
+            position: self.position,
+            up: self.up,
+            target: self.position + self.front,
+            ..Default::default()
+        });
+    }
+
+    fn draw_camera_gizmo(&self) {
+        let axes = [
+            (vec3(1.0, 0.0, 0.0), RED, "X"),
+            (vec3(0.0, 1.0, 0.0), GREEN, "Y"),
+            (vec3(0.0, 0.0, 1.0), BLUE, "Z"),
+        ];
+
+        let view_rot = Mat3::from_cols(self.right, self.up, -self.front);
+
+        let base = vec2(screen_width() - 80.0, 80.0);
+        let scale = 40.0;
+
+        for (axis, color, label) in axes.iter() {
+            let dir = view_rot * *axis;
+            let end = base + vec2(dir.x, -dir.y) * scale;
+            draw_line(base.x, base.y, end.x, end.y, 2.0, *color);
+            draw_text(label, end.x + 4.0, end.y + 4.0, 16.0, *color);
+        }
+
+        let pos_text = format!("X: {:.2}", self.position.x / POSITION_SCALE,);
+        draw_text(&pos_text, base.x - 60.0, base.y + 60.0, 16.0, WHITE);
+
+        let pos_text = format!("Y: {:.2}", self.position.y / POSITION_SCALE,);
+        draw_text(&pos_text, base.x - 60.0, base.y + 76.0, 16.0, WHITE);
+        let pos_text = format!("Z: {:.2}", self.position.z / POSITION_SCALE,);
+        draw_text(&pos_text, base.x - 60.0, base.y + 92.0, 16.0, WHITE);
+    }
 }
 
 #[macroquad::main(conf)]
 async fn main() {
-    let mut x = 0.0;
-    let mut switch = false;
-    let bounds = 8.0;
-
-    let world_up = vec3(0.0, 1.0, 0.0);
-    let mut yaw: f32 = 1.18;
-    let mut pitch: f32 = 0.0;
-
-    let mut front = vec3(
-        yaw.cos() * pitch.cos(),
-        pitch.sin(),
-        yaw.sin() * pitch.cos(),
-    )
-    .normalize();
-    let mut right = front.cross(world_up).normalize();
-    let mut up = right.cross(front).normalize();
-
-    let mut position = vec3(0.0, 1.0, 0.0);
-    let mut last_mouse_position: Vec2 = mouse_position().into();
-
-    let mut grabbed = true;
-    set_cursor_grab(grabbed);
-    show_mouse(false);
+    let mut camera = Camera::new();
 
     let mut system = System { bodies: vec![] };
     let mut running = false;
@@ -125,69 +301,35 @@ async fn main() {
 
     let mut selected_body = None;
 
-    loop {
-        let delta = get_frame_time();
+    let mut focused = FocusPoint::None;
 
+    loop {
         if is_key_pressed(KeyCode::Escape) {
             break;
         }
         if is_key_pressed(KeyCode::Tab) {
-            grabbed = !grabbed;
-            set_cursor_grab(grabbed);
-            show_mouse(!grabbed);
+            camera.grabbed = !camera.grabbed;
+            set_cursor_grab(camera.grabbed);
+            show_mouse(!camera.grabbed);
         }
 
-        if is_key_down(KeyCode::Up) {
-            position += front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Down) {
-            position -= front * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Left) {
-            position -= right * MOVE_SPEED;
-        }
-        if is_key_down(KeyCode::Right) {
-            position += right * MOVE_SPEED;
-        }
-
-        let mouse_position: Vec2 = mouse_position().into();
-        let mouse_delta = mouse_position - last_mouse_position;
-
-        last_mouse_position = mouse_position;
-
-        if grabbed {
-            yaw += mouse_delta.x * delta * LOOK_SPEED;
-            pitch += mouse_delta.y * delta * -LOOK_SPEED;
-
-            pitch = if pitch > 1.5 { 1.5 } else { pitch };
-            pitch = if pitch < -1.5 { -1.5 } else { pitch };
-
-            front = vec3(
-                yaw.cos() * pitch.cos(),
-                pitch.sin(),
-                yaw.sin() * pitch.cos(),
-            )
-            .normalize();
-
-            right = front.cross(world_up).normalize();
-            up = right.cross(front).normalize();
-
-            x += if switch { 0.04 } else { -0.04 };
-            if x >= bounds || x <= -bounds {
-                switch = !switch;
+        match focused {
+            FocusPoint::None => camera.update_free(),
+            FocusPoint::MassCenter => camera.update_with_point(system.mass_center()),
+            FocusPoint::Body(body_index) => {
+                if let Some(_) = selected_body {
+                    focused = FocusPoint::None;
+                    camera.update_free();
+                } else {
+                    camera.update_with_point(system.bodies[body_index].position);
+                }
             }
         }
+        selected_body = None;
 
         clear_background(BLACK);
 
-        // Going 3d!
-
-        set_camera(&Camera3D {
-            position: position,
-            up: up,
-            target: position + front,
-            ..Default::default()
-        });
+        camera.apply_self();
 
         if running {
             let instant = Instant::now();
@@ -206,7 +348,7 @@ async fn main() {
 
         for body in &system.bodies {
             draw_sphere(
-                body.position / 1000.0,
+                body.position * POSITION_SCALE,
                 body.radius / 200.0,
                 None,
                 Color::new(body.color[0], body.color[1], body.color[2], 1.0),
@@ -215,6 +357,8 @@ async fn main() {
 
         set_default_camera();
 
+        camera.draw_camera_gizmo();
+
         egui_macroquad::ui(|egui_ctx| {
             egui::Window::new("Simulation Controls")
                 .default_pos((10.0, 10.0))
@@ -222,6 +366,12 @@ async fn main() {
                     ui.heading("Simulation");
                     if ui.checkbox(&mut running, "Run simulation").clicked() {
                         prev_instant = Instant::now();
+                    }
+                    if ui.button("Free camera").clicked() {
+                        focused = FocusPoint::None;
+                    }
+                    if ui.button("Focus camera on mass center").clicked() {
+                        focused = FocusPoint::MassCenter;
                     }
 
                     ui.separator();
@@ -263,6 +413,10 @@ async fn main() {
                             number_line!(body.velocity.z, "vz");
                             ui.color_edit_button_rgb(&mut body.color);
 
+                            if ui.button("Focus body").clicked() {
+                                focused = FocusPoint::Body(i);
+                            }
+
                             // Remove body button
                             if ui.button("Remove this body").clicked() {
                                 selected_body = Some(i);
@@ -276,7 +430,6 @@ async fn main() {
 
         if let Some(index) = selected_body {
             system.bodies.remove(index);
-            selected_body = None;
         }
 
         next_frame().await
