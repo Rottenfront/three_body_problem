@@ -98,7 +98,6 @@ impl System {
                 .iter()
                 .fold(Vec3::ZERO, |acc, body| acc + body.position * body.mass)
                 / self.bodies.iter().fold(0.0, |acc, body| acc + body.mass)
-                * POSITION_SCALE
         }
     }
 }
@@ -221,6 +220,7 @@ impl Camera {
     }
 
     fn update_with_point(&mut self, focus_point: Vec3) {
+        let focus_point = focus_point * POSITION_SCALE;
         let delta = get_frame_time();
         if is_key_down(KeyCode::A) {
             self.yaw -= LOOK_SPEED * delta;
@@ -366,6 +366,17 @@ async fn main() {
                     ui.heading("Simulation");
                     if ui.checkbox(&mut running, "Run simulation").clicked() {
                         prev_instant = Instant::now();
+                    }
+                    match focused {
+                        FocusPoint::None => {
+                            ui.label("Camera is in free mode");
+                        }
+                        FocusPoint::MassCenter => {
+                            ui.label("Camera is focused on mass center");
+                        }
+                        FocusPoint::Body(index) => {
+                            ui.label(&format!("Camera is focused on body #{index}"));
+                        }
                     }
                     if ui.button("Free camera").clicked() {
                         focused = FocusPoint::None;
