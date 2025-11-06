@@ -149,9 +149,9 @@ impl Camera {
         let position = vec3(0.0, 0.0, 0.0);
         let last_mouse_position: Vec2 = mouse_position().into();
 
-        let grabbed = true;
+        let grabbed = false;
         set_cursor_grab(grabbed);
-        show_mouse(false);
+        show_mouse(true);
         Self {
             yaw,
             pitch,
@@ -312,6 +312,9 @@ async fn main() {
             set_cursor_grab(camera.grabbed);
             show_mouse(!camera.grabbed);
         }
+        if is_key_pressed(KeyCode::R) {
+            running = !running;
+        }
 
         match focused {
             FocusPoint::None => camera.update_free(),
@@ -434,6 +437,43 @@ async fn main() {
                             }
                         });
                     }
+                });
+
+            egui::Window::new("Controls")
+                .default_pos((100.0, 10.0))
+                .show(egui_ctx, |ui| {
+                    ui.label("About:");
+                    ui.label("This is a simulation of Newton's law of universal gravitation.");
+                    ui.label("You can add, remove and change bodies in the system.");
+                    ui.label("Corresponding controls are in window \"Simulation Controls\".");
+                    ui.label("Subwindows inside main frame are movable and resizable.");
+                    
+                    ui.add_space(10.0);
+
+                    ui.label("Camera has free mode and focused mode.");
+                    ui.label("It can focus either on system mass center or on particular body.");
+                    ui.label("Camera will maintain its distance to the focused point.");
+                    
+                    ui.add_space(10.0);
+
+                    ui.label("Movement:");
+                    ui.label("W - Move forwards");
+                    ui.label("S - Move backwards");
+                    ui.label("A - Move left");
+                    ui.label("D - Move right");
+                    ui.label("Q - Move up");
+                    ui.label("E - Move down");
+                    ui.label("Tab - Toggle grab cursor for camera movement");
+
+                    ui.add_space(10.0);
+
+                    ui.label("Special:");
+                    ui.label("R - Run simulation");
+                    ui.label("Esc - Quit");
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.strong("Note: Make sure the window has focus to use these keys!");
                 });
         });
 
